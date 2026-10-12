@@ -1,0 +1,20 @@
+.route-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.checkpoint-strip {
+  display: flex;
+  overflow-x: auto;
+  padding: 5px 2px 8px;
+  scrollbar-width: thin;
+}
+
+.checkpoint-strip .checkpoint {
+  display: block !important;
+  min-width: 112px;
+  flex: 1;
+}
+
+@media (max-width: 700px) {
+  .route-metrics { grid-template-columns: repeat(2, 1fr); }
+}

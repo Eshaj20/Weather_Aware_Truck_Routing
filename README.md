@@ -8,7 +8,8 @@ RoadCast compares three truck routes using forecast conditions at the truck's es
 - **Django** API boundary for production proxying and provider isolation
 - **OSRM** route alternatives and **Nominatim** geocoding
 - **Open-Meteo** hourly wind, rain, and snowfall forecasts
-- Browser-direct providers keep the static hosted demo usable; the Django `/api/plan/` endpoint is included for a controlled production deployment.
+- Django's `/api/plan/` endpoint owns the complete pipeline: provider calls, haversine checkpoint sampling, ETA matching, weather validation, risk scoring, summaries, and recommendation.
+- The static demo can call providers directly when `VITE_API_URL` is absent; set that variable to the deployed Django origin for the full-stack submission.
 
 ## Run locally
 
@@ -23,6 +24,8 @@ In another terminal:
 cd backend
 python -m venv .venv
 .venv/Scripts/pip install -r requirements.txt
+.venv/Scripts/activate
+set DJANGO_DEBUG=true
 .venv/Scripts/python manage.py runserver
 ```
 
@@ -42,7 +45,20 @@ Each checkpoint is classified by the worst concurrent wind/rain/snow category. L
 
 ## Deployment notes
 
-The frontend is a static build (`dist/`). For a single-origin production deployment, host Django separately and change the frontend provider adapter to `/api/plan/`, or serve the built frontend from Django. Public APIs are intentionally isolated in `src/api.js` and `backend/routing/views.py`.
+The frontend is a static build (`dist/`). A Render-compatible backend blueprint is included at `render.yaml`.
+
+1. Deploy the repository blueprint and set `DJANGO_ALLOWED_HOSTS` to the backend hostname.
+2. Set `CORS_ALLOWED_ORIGINS` to the exact frontend origin.
+3. Build the frontend with `VITE_API_URL=https://your-backend.example.com`.
+4. Confirm `/api/health/` and submit one live trip before recording the walkthrough.
+
+The public OSRM driving profile is not truck-restriction-aware. This assignment uses load weight for weather safety only; production navigation should replace OSRM with a truck-aware provider.
+
+Missing or out-of-range weather is rejected as unavailable. It is never converted to zero risk. `No Travel` mileage ranks ahead of the requested severe/high/average/time tie-breakers so a blocked route cannot be recommended over a travel-permitted route.
+
+## API contract
+
+`POST /api/plan/` accepts `origin`, `destination`, ISO-8601 `departure`, `loadLbs`, and `intervalMiles` (`10`, `25`, or `50`). It returns three routes with geometry, checkpoint miles, ETAs, live and 0–48-hour weather, risk explanations, mileage-weighted summaries, and `recommendedRouteId`.
 
 ## Walkthrough outline (5–7 minutes)
 
