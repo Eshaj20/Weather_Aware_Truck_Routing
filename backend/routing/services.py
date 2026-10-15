@@ -1,5 +1,8 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
+from bisect import bisect_left
 from math import asin, cos, radians, sin, sqrt
+import os
 import requests
 from .risk import classify, summarize, ranking_key
 
@@ -12,7 +15,8 @@ class PlanningError(ValueError):
     pass
 
 
-def _get(url, *, params=None, timeout=25):
+def _get(url, *, params=None, timeout=None):
+    timeout = timeout or float(os.environ.get('ROADCAST_PROVIDER_TIMEOUT', '12'))
     response = requests.get(url, params=params, headers={'User-Agent': 'RoadCast/1.0'}, timeout=timeout)
     response.raise_for_status()
     return response.json()
@@ -49,18 +53,25 @@ def sample_line(line, route_miles, interval):
     return samples
 
 
-def weather_batches(samples):
-    forecasts = []
-    for start in range(0, len(samples), 20):
-        batch = samples[start:start + 20]
-        data = _get(WEATHER, params={
+def _fetch_weather_batch(batch):
+    data = _get(WEATHER, params={
             'latitude': ','.join(str(s['point'][1]) for s in batch),
             'longitude': ','.join(str(s['point'][0]) for s in batch),
             'hourly': 'wind_speed_10m,rain,snowfall', 'wind_speed_unit': 'mph',
             'forecast_days': 4, 'timezone': 'GMT',
-        })
-        forecasts.extend(data if isinstance(data, list) else [data])
-    if len(forecasts) != len(samples): raise PlanningError('Weather provider returned an incomplete forecast.')
+    })
+    return data if isinstance(data, list) else [data]
+
+
+def weather_batches(samples):
+    batches = [samples[start:start + 20] for start in range(0, len(samples), 20)]
+    forecasts = []
+    workers = min(len(batches), int(os.environ.get('ROADCAST_WEATHER_WORKERS', '6')))
+    with ThreadPoolExecutor(max_workers=max(workers, 1)) as executor:
+        for data in executor.map(_fetch_weather_batch, batches):
+            forecasts.extend(data)
+    if len(forecasts) != len(samples):
+        raise PlanningError('Weather provider returned an incomplete forecast.')
     return forecasts
 
 
@@ -69,18 +80,27 @@ def parse_time(value):
     return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
 
 
-def weather_at(entry, moment):
-    times = [parse_time(value) for value in entry.get('hourly', {}).get('time', [])]
+def build_timeline(entry):
+    hourly = entry.get('hourly', {})
+    times = [parse_time(value) for value in hourly.get('time', [])]
     if not times: raise PlanningError('Weather provider returned an incomplete forecast.')
-    index = min(range(len(times)), key=lambda i: abs((times[i] - moment).total_seconds()))
+    try:
+        values = [[float(value) for value in hourly[name]] for name in ('wind_speed_10m', 'rain', 'snowfall')]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PlanningError('Weather provider returned an incomplete forecast.') from exc
+    if any(len(series) != len(times) for series in values):
+        raise PlanningError('Weather provider returned an incomplete forecast.')
+    return times, values
+
+
+def weather_at(timeline, moment):
+    times, values = timeline
+    index = bisect_left(times, moment)
+    candidates = [i for i in (index - 1, index) if 0 <= i < len(times)]
+    index = min(candidates, key=lambda i: abs((times[i] - moment).total_seconds()))
     if abs((times[index] - moment).total_seconds()) > 5400:
         raise PlanningError('The selected trip falls outside the available forecast window.')
-    hourly = entry['hourly']
-    try:
-        values = [float(hourly[name][index]) for name in ('wind_speed_10m', 'rain', 'snowfall')]
-    except (KeyError, IndexError, TypeError, ValueError) as exc:
-        raise PlanningError('Weather provider returned an incomplete forecast.') from exc
-    return {'windMph': values[0], 'rainInHr': values[1] / 25.4, 'snowInHr': values[2] / 2.54}
+    return {'windMph': values[0][index], 'rainInHr': values[1][index] / 25.4, 'snowInHr': values[2][index] / 2.54}
 
 
 def ensure_three_routes(routes, origin, destination):
@@ -110,22 +130,50 @@ def plan_trip(origin_text, destination_text, departure_text, load_lbs, interval)
         'alternatives': 3, 'overview': 'full', 'geometries': 'geojson', 'steps': 'false',
     })
     raw_routes = ensure_three_routes(route_data.get('routes', []), origin, destination)
-    if len(raw_routes) < 3: raise PlanningError('The routing provider could not produce three distinct alternatives for this trip.')
-    routes = []
+    if len(raw_routes) < 3:
+        raise PlanningError('The routing provider could not produce three distinct alternatives for this trip.')
+
+    route_contexts = []
+    all_samples = []
     for route_index, raw in enumerate(raw_routes[:3]):
         distance, duration = raw['distance'] / 1609.344, raw['duration'] / 60
         line = raw['geometry']['coordinates']
         samples = sample_line(line, distance, interval)
-        forecasts = weather_batches(samples)
+        start = len(all_samples)
+        all_samples.extend(samples)
+        route_contexts.append({
+            'index': route_index,
+            'raw': raw,
+            'distance': distance,
+            'duration': duration,
+            'line': line,
+            'samples': samples,
+            'forecast_start': start,
+        })
+
+    # Fetch every route's checkpoints through one bounded pool. This preserves
+    # response ordering while avoiding a long series of blocking API calls.
+    all_forecasts = weather_batches(all_samples)
+    forecast_base = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    routes = []
+    for context in route_contexts:
+        route_index = context['index']
+        raw = context['raw']
+        distance = context['distance']
+        duration = context['duration']
+        samples = context['samples']
+        start = context['forecast_start']
+        forecasts = all_forecasts[start:start + len(samples)]
         checkpoints = []
         for index, (sample, forecast_data) in enumerate(zip(samples, forecasts)):
             eta = departure + timedelta(seconds=raw['duration'] * sample['mile'] / distance)
-            weather = weather_at(forecast_data, eta)
-            hourly = [weather_at(forecast_data, datetime.now(timezone.utc) + timedelta(hours=hour)) for hour in range(49)]
+            timeline = build_timeline(forecast_data)
+            weather = weather_at(timeline, eta)
+            hourly = [weather_at(timeline, forecast_base + timedelta(hours=hour)) for hour in range(49)]
             checkpoints.append({'id': f'{route_index}-{index}', **sample, 'eta': eta.isoformat(),
                                 'weather': weather, 'forecast': hourly,
                                 'risk': classify(weather['windMph'], weather['rainInHr'], weather['snowInHr'], load_lbs)})
-        routes.append({'id': f'route-{route_index + 1}', 'name': f'Route {chr(65 + route_index)}', 'line': line,
+        routes.append({'id': f'route-{route_index + 1}', 'name': f'Route {chr(65 + route_index)}', 'line': context['line'],
                        'checkpoints': checkpoints, 'summary': summarize(checkpoints, distance, duration)})
     recommended = min(routes, key=ranking_key)['id']
     return {'origin': origin, 'destination': destination, 'routes': routes, 'recommendedRouteId': recommended,
