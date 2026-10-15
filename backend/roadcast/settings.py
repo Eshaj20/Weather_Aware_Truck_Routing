@@ -4,6 +4,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'development-only-roadcast-key-change-before-production-7f4e2c1a9b8d6')
 DEBUG = os.environ.get('DJANGO_DEBUG', 'false').lower() == 'true'
 ALLOWED_HOSTS = [v.strip() for v in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if v.strip()]
+for vercel_host_variable in ('VERCEL_URL', 'VERCEL_BRANCH_URL', 'VERCEL_PROJECT_PRODUCTION_URL'):
+    vercel_host = os.environ.get(vercel_host_variable, '').removeprefix('https://').split('/')[0]
+    if vercel_host and vercel_host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(vercel_host)
 INSTALLED_APPS = ['corsheaders', 'django.contrib.contenttypes', 'routing']
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',

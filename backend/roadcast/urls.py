@@ -1,2 +1,4 @@
 from django.urls import include, path
-urlpatterns = [path('api/', include('routing.urls'))]
+from routing.views import health
+
+urlpatterns = [path('', health), path('api/', include('routing.urls'))]
