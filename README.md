@@ -76,8 +76,6 @@ Missing or out-of-range weather is rejected as unavailable. It is never converte
 
 ## Walkthrough outline (5–7 minutes)
 
-The complete narration and click-by-click timing is in [`LOOM_SCRIPT.md`](LOOM_SCRIPT.md).
-
 1. Enter origin, destination, departure, load, and checkpoint spacing.
 2. Compare all three color-coded routes and the safety-first recommendation.
 3. Select a route; inspect its summary, checkpoint ETAs, wind, and map popovers.
