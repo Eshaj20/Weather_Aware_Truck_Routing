@@ -45,7 +45,9 @@ Each checkpoint is classified by the worst concurrent wind/rain/snow category. L
 
 ## Deployment (no card required)
 
-The frontend is hosted at [RoadCast](https://roadcast-truck-routing.salty-macaw-4898.chatgpt.site). Deploy the Django API on Vercel's Hobby plan:
+The frontend is hosted at [RoadCast](https://roadcast-truck-routing.salty-macaw-4898.chatgpt.site), and the Django API is deployed at [weather-aware-truck-routing-beige.vercel.app](https://weather-aware-truck-routing-beige.vercel.app). The production Vite build uses this API through `.env.production`.
+
+To reproduce the Django deployment on Vercel's Hobby plan:
 
 1. Push this repository to GitHub, then select **Add New > Project** in Vercel and import it.
 2. Set **Root Directory** to `backend`. Vercel detects Django through `manage.py`; `vercel.json` gives the planning function the Hobby plan's 60-second maximum duration.
