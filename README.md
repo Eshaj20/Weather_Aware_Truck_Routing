@@ -1,72 +1,100 @@
-# RoadCast — Weather-Aware Truck Routing
+# RoadCast: Weather-Aware Truck Routing
 
-RoadCast compares three truck routes using forecast conditions at the truck's estimated arrival time. It follows the supplied wind, rain, snow, and load thresholds, then recommends by severe miles, high-risk miles, average risk, and travel time—in that order.
+RoadCast compares three truck routes using forecast conditions at the truck's estimated arrival time. It applies the supplied wind, rain, snow, and load thresholds, then recommends the safest route before considering travel time.
+
+## Live application
+
+- **Frontend:** [roadcast-truck-routing.salty-macaw-4898.chatgpt.site](https://roadcast-truck-routing.salty-macaw-4898.chatgpt.site)
+- **Django API:** [weather-aware-truck-routing-beige.vercel.app](https://weather-aware-truck-routing-beige.vercel.app)
+- **Health check:** [`/api/health/`](https://weather-aware-truck-routing-beige.vercel.app/api/health/)
+
+## Features
+
+- Origin, destination, departure time, load weight, and 10/25/50-mile checkpoint inputs
+- Three OSRM route alternatives with fallback generation for insufficient alternatives
+- Hourly Open-Meteo forecasts matched to each checkpoint's truck ETA
+- Wind, rain, snow, and load-aware risk classification
+- Safety-first route recommendation with mileage-weighted summaries
+- Leaflet map with all routes, checkpoint popovers, ETAs, and risk colors
+- Smooth 0–48-hour forecast corridor slider using cached checkpoint forecasts
+- Explicit unavailable-weather handling; missing data is never treated as zero risk
 
 ## Architecture
 
-- **React + Vite** interactive planning UI and Leaflet map
-- **Django** API boundary for production proxying and provider isolation
-- **OSRM** route alternatives and **Nominatim** geocoding
-- **Open-Meteo** hourly wind, rain, and snowfall forecasts
-- Django's `/api/plan/` endpoint owns the complete pipeline: provider calls, haversine checkpoint sampling, ETA matching, weather validation, risk scoring, summaries, and recommendation.
-- The static demo can call providers directly when `VITE_API_URL` is absent; set that variable to the deployed Django origin for the full-stack submission.
+- **React + Vite:** planning interface and production build
+- **Leaflet + React Leaflet:** route, checkpoint, and corridor visualization
+- **Django:** validation, provider orchestration, ETA matching, scoring, and recommendation
+- **Nominatim:** origin and destination geocoding
+- **OSRM:** route alternatives and geometry
+- **Open-Meteo:** hourly wind, rain, and snowfall forecasts
+
+The production frontend sends planning requests to Django. Django batches checkpoint locations and fetches weather through a bounded concurrent worker pool, keeping the live three-route request within the Vercel serverless execution window.
 
 ## Run locally
 
-```bash
+Requirements: Node.js 18+ and Python 3.12.
+
+Start Django in PowerShell:
+
+```powershell
+cd backend
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+$env:DJANGO_DEBUG="true"
+python manage.py runserver
+```
+
+Start React in a second PowerShell terminal:
+
+```powershell
 npm install
+$env:VITE_API_URL="http://127.0.0.1:8000"
 npm run dev
 ```
 
-In another terminal:
-
-```bash
-cd backend
-python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt
-.venv/Scripts/activate
-set DJANGO_DEBUG=true
-.venv/Scripts/python manage.py runserver
-```
-
-The app opens with a complete Dallas-to-Denver demonstration. Submit the form to load live routes and forecasts. If a public provider is unavailable, the sample remains interactive and a visible fallback notice appears.
+Open `http://localhost:5173`. The initial Dallas-to-Denver sample keeps the interface explorable before the first live submission; live results are clearly labeled.
 
 ## Verification
 
-```bash
+```powershell
 npm test
 npm run build
-cd backend && python manage.py test
+python backend\manage.py test routing
+python backend\manage.py check --deploy
 ```
+
+Current verification: **9 frontend tests**, **7 Django tests**, a successful production build, and a live three-route API smoke test.
 
 ## Risk model
 
-Each checkpoint is classified by the worst concurrent wind/rain/snow category. Load rules can escalate wind risk. Route risk mileage is approximated by assigning each sampled segment the risk of its checkpoint. The recommendation is a stable lexicographic sort matching the brief.
+Each checkpoint receives the worst concurrent wind, rain, or snow category.
 
-## Deployment (no card required)
+| Condition | Low | Moderate | High | Severe | No Travel |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Wind | `<25 mph` | `25–34` | `35–44` | `45–54` | `≥55 mph` |
+| Rain | `<0.10 in/hr` | `0.10–0.25` | `0.25–0.50` | `0.50–1.00` | `>1.00` |
+| Snow | `<0.5 in/hr` | `0.5–1.0` | `1.0–2.0` | `2.0–3.0` | `>3.0` |
 
-The frontend is hosted at [RoadCast](https://roadcast-truck-routing.salty-macaw-4898.chatgpt.site), and the Django API is deployed at [weather-aware-truck-routing-beige.vercel.app](https://weather-aware-truck-routing-beige.vercel.app). The production Vite build uses this API through `.env.production`.
+Load escalation rules:
 
-To reproduce the Django deployment on Vercel's Hobby plan:
+- Wind `≥55 mph`: No Travel for every load
+- Wind `45–54 mph` with load `>30,000 lb`: No Travel
+- Wind `35–44 mph` with load `>40,000 lb`: Severe
 
-1. Push this repository to GitHub, then select **Add New > Project** in Vercel and import it.
-2. Set **Root Directory** to `backend`. Vercel detects Django through `manage.py`; `vercel.json` gives the planning function the Hobby plan's 60-second maximum duration.
-3. Add these production environment variables:
+Route mileage is approximated by assigning each sampled segment its checkpoint risk. Recommendation is a stable lexicographic sort by No Travel miles, Severe miles, High miles, mileage-weighted average risk, and duration. The leading No Travel safety gate prevents a blocked route from beating a travel-permitted route.
 
-   ```text
-   DJANGO_SECRET_KEY=<a long random value>
-   DJANGO_DEBUG=false
-   DJANGO_ALLOWED_HOSTS=<your-project>.vercel.app
-   CORS_ALLOWED_ORIGINS=https://roadcast-truck-routing.salty-macaw-4898.chatgpt.site
-   ROADCAST_PROVIDER_TIMEOUT=12
-   ROADCAST_WEATHER_WORKERS=6
-   ```
+## Production deployment
 
-4. Deploy and verify `https://<your-project>.vercel.app/api/health/`.
-5. Set the frontend build variable `VITE_API_URL=https://<your-project>.vercel.app`, rebuild, and publish the frontend again.
-6. Submit one live trip and verify the response source says **Live routing + forecast APIs** before recording the walkthrough.
+The application is fully deployed:
 
-`render.yaml` remains available as an optional paid-host alternative. The API parallelizes bounded Open-Meteo batches so the three-route plan fits a serverless request much more reliably.
+- The public React build is hosted with Sites.
+- The Django API is hosted on Vercel Hobby with `backend` as its project root.
+- `.env.production` points the Vite build to the deployed Django origin.
+- `backend/pyproject.toml` declares the Python dependencies and WSGI entrypoint.
+- `backend/vercel.json` configures the API function's execution duration.
+
+Required Django production variables are documented in `backend/.env.example`. Secrets remain outside Git and must be configured in the hosting dashboard.
 
 The public OSRM driving profile is not truck-restriction-aware. This assignment uses load weight for weather safety only; production navigation should replace OSRM with a truck-aware provider.
 
