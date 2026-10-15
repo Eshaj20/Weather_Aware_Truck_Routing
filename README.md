@@ -103,14 +103,3 @@ Missing or out-of-range weather is rejected as unavailable. It is never converte
 ## API contract
 
 `POST /api/plan/` accepts `origin`, `destination`, ISO-8601 `departure`, `loadLbs`, and `intervalMiles` (`10`, `25`, or `50`). It returns three routes with geometry, checkpoint miles, ETAs, live and 0–48-hour weather, risk explanations, mileage-weighted summaries, and `recommendedRouteId`.
-
-## Walkthrough outline (5–7 minutes)
-
-1. Enter origin, destination, departure, load, and checkpoint spacing.
-2. Compare all three color-coded routes and the safety-first recommendation.
-3. Select a route; inspect its summary, checkpoint ETAs, wind, and map popovers.
-4. Move the 0–48 hour forecast slider to see the corridor risk layer update.
-5. Raise load above 40,000 lb and explain the load-based wind escalation.
-6. Tour `risk.js`, `api.js`, Django endpoints, and boundary tests.
-
-Forecasts are decision support, not a replacement for official closures, carrier policy, or driver judgment.
